@@ -57,7 +57,7 @@ public:
 
   VkDebugReportCallbackEXT m_debugReportCallback = nullptr;
 private:
-  static constexpr std::size_t kWorkGroupSize = 512;
+  static constexpr std::size_t kWorkGroupSize = 32;
 
   VkInstance       m_instance       = VK_NULL_HANDLE;
   VkCommandPool    m_commandPool    = VK_NULL_HANDLE;

@@ -123,7 +123,7 @@ std::vector<float> CreateRandomArray(std::size_t size, float rangeFrom, float ra
 int main()
 {
   constexpr int LENGTH = 1'000'000;
-  constexpr int VULKAN_DEVICE_ID = 1;
+  constexpr int VULKAN_DEVICE_ID = 0;
 
   auto simple_compute = std::make_unique<SimpleCompute>(LENGTH);
   if(simple_compute == nullptr)

@@ -26,7 +26,7 @@ void SimpleCompute::InitVulkan(const char** a_instanceExtensions, uint32_t a_ins
   for (uint32_t i = 0; i < a_instanceExtensionsCount; ++i) {
     m_instanceExtensions.push_back(a_instanceExtensions[i]);
   }
-  SetupValidationLayers();
+  // SetupValidationLayers();
   VK_CHECK_RESULT(volkInitialize());
   CreateInstance();
   volkLoadInstance(m_instance);
