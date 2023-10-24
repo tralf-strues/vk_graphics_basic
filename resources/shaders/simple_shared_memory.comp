@@ -1,0 +1,89 @@
+#version 430
+
+#define WORK_GROUP_SIZE 512
+#define KERNEL_SIZE 7
+
+layout( local_size_x = WORK_GROUP_SIZE ) in;
+
+layout( push_constant ) uniform params {
+  uint len;
+} PushConstant;
+
+layout(std430, binding = 0) buffer readonly Input
+{
+    float array[];
+};
+
+layout(std430, binding = 1) buffer writeonly Output
+{
+    float result[];
+};
+
+shared float prefixSum[8 * WORK_GROUP_SIZE];
+
+void main() 
+{
+    // int elemIdx = int(gl_GlobalInvocationID.x);
+
+    // int n = int(PushConstant.len);
+
+    // if (elemIdx < n)
+    // {
+    //     float curResult = 0.0;
+
+    //     for (int windowOffset = -KERNEL_SIZE / 2; windowOffset <= KERNEL_SIZE / 2; ++windowOffset)
+    //     {
+    //         int idx = elemIdx + windowOffset;
+
+    //         if (idx >= 0 && idx < n)
+    //         {
+    //             curResult += array[idx];
+    //         }
+    //     }
+
+    //     curResult /= float(KERNEL_SIZE);
+
+    //     result[elemIdx] = array[elemIdx] - curResult;
+    // }
+
+
+    uint localIdx     = uint(gl_LocalInvocationID.x);
+    uint globalIdx    = uint(gl_GlobalInvocationID.x);
+    uint workGroupIdx = uint(gl_WorkGroupID.x);
+
+    uint n = uint(PushConstant.len);
+
+    if (globalIdx < n)
+    {
+        float curConvolution = 0.0;
+
+        for (int windowOffset = -KERNEL_SIZE / 2; windowOffset <= KERNEL_SIZE / 2; ++windowOffset)
+        {
+            int idx = int(globalIdx) + windowOffset;
+
+            if (idx >= 0 && idx < int(n))
+            {
+                curConvolution += array[idx];
+            }
+        }
+
+        curConvolution /= float(KERNEL_SIZE);
+        prefixSum[localIdx] = array[globalIdx] - curConvolution;
+
+        barrier();
+
+        for (uint i = 1; i < WORK_GROUP_SIZE; i <<= 1)
+        {
+            if (localIdx + i < WORK_GROUP_SIZE)
+            {
+                prefixSum[localIdx + i] += prefixSum[localIdx];
+            }
+
+            barrier();
+        }
+
+        if (localIdx == 0) {
+            result[workGroupIdx] = prefixSum[WORK_GROUP_SIZE - 1];
+        }
+    }
+}

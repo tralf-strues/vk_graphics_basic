@@ -22,6 +22,15 @@ public:
 
   void Execute() override;
 
+  VkBuffer GetInputBuffer();
+  VkBuffer GetOutputBuffer();
+  std::shared_ptr<vk_utils::ICopyEngine> GetCopyEngine();
+
+  std::size_t GetWorkGroupSize();
+  std::size_t GetWorkGroupCount();
+
+  void BuildPipeline(const char* shader_spv_filename);
+
   //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
   // debugging utils
@@ -48,6 +57,7 @@ public:
 
   VkDebugReportCallbackEXT m_debugReportCallback = nullptr;
 private:
+  static constexpr std::size_t kWorkGroupSize = 512;
 
   VkInstance       m_instance       = VK_NULL_HANDLE;
   VkCommandPool    m_commandPool    = VK_NULL_HANDLE;
@@ -73,13 +83,14 @@ private:
   std::vector<const char*> m_validationLayers;
   std::shared_ptr<vk_utils::ICopyEngine> m_pCopyHelper;
 
-  VkDescriptorSet       m_sumDS; 
-  VkDescriptorSetLayout m_sumDSLayout = nullptr;
+  VkDescriptorSet       m_ds; 
+  VkDescriptorSetLayout m_dsLayout = nullptr;
   
-  VkPipeline m_pipeline;
+  VkPipeline m_pipeline{VK_NULL_HANDLE};
   VkPipelineLayout m_layout;
 
-  VkBuffer m_A, m_B, m_sum;
+  VkBuffer m_input;
+  VkBuffer m_output;
  
   void CreateInstance();
   void CreateDevice(uint32_t a_deviceId);
@@ -87,7 +98,7 @@ private:
   void BuildCommandBufferSimple(VkCommandBuffer a_cmdBuff, VkPipeline a_pipeline);
 
   void SetupSimplePipeline();
-  void CreateComputePipeline();
+  void CreateComputePipeline(const char* shader_spv_filename);
   void CleanupPipeline();
 
   void Cleanup();
