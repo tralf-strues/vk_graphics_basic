@@ -20,6 +20,10 @@ class SimpleRender : public IRender
 public:
   const std::string VERTEX_SHADER_PATH = "../resources/shaders/simple.vert";
   const std::string FRAGMENT_SHADER_PATH = "../resources/shaders/simple.frag";
+  const std::string FC_SHADER_PATH = "../resources/shaders/frustum_culling.comp";
+
+  constexpr static uint32_t INSTANCES = 10'000;
+  constexpr static uint32_t MESH_ID = 1;
 
   SimpleRender(uint32_t a_width, uint32_t a_height);
   ~SimpleRender()  { Cleanup(); };
@@ -75,6 +79,8 @@ protected:
 
   vk_utils::QueueFID_T m_queueFamilyIDXs {UINT32_MAX, UINT32_MAX, UINT32_MAX};
 
+  std::shared_ptr<vk_utils::ICopyEngine> m_pCopyHelper;
+
   struct
   {
     uint32_t    currentFrame      = 0u;
@@ -89,7 +95,6 @@ protected:
   struct
   {
     LiteMath::float4x4 projView;
-    LiteMath::float4x4 model;
   } pushConst2M;
 
   UniformParams m_uniforms {};
@@ -104,6 +109,34 @@ protected:
   VkRenderPass m_screenRenderPass = VK_NULL_HANDLE; // main renderpass
 
   std::shared_ptr<vk_utils::DescriptorMaker> m_pBindings = nullptr;
+
+  // *** frustum culling
+  struct
+  {
+    mat4 viewProjection;
+    Box4f aabb;
+    uint instancesTotal;
+  } pushConstFC;
+
+  VkDrawIndexedIndirectCommand m_drawCmd;
+  VkBuffer m_ssboDrawCmd            = VK_NULL_HANDLE;
+  VkDeviceMemory m_ssboDrawCmdAlloc = VK_NULL_HANDLE;
+  void *m_ssboDrawCmdMappedMem      = nullptr;
+
+  VkBuffer m_ssboTransforms            = VK_NULL_HANDLE;
+  VkDeviceMemory m_ssboTransformsAlloc = VK_NULL_HANDLE;
+  void *m_ssboTransformsMappedMem      = nullptr;
+
+  VkBuffer m_ssboVisibleIds            = VK_NULL_HANDLE;
+  VkDeviceMemory m_ssboVisibleIdsAlloc = VK_NULL_HANDLE;
+
+  pipeline_data_t m_FCPipeline{};
+
+  VkDescriptorSet m_FCDSet             = VK_NULL_HANDLE;
+  VkDescriptorSetLayout m_FCDSetLayout = VK_NULL_HANDLE;
+
+  std::shared_ptr<vk_utils::DescriptorMaker> m_pFCBindings = nullptr;
+  // ***
 
   // *** presentation
   VkSurfaceKHR m_surface = VK_NULL_HANDLE;
@@ -141,12 +174,18 @@ protected:
   void BuildCommandBufferSimple(VkCommandBuffer cmdBuff, VkFramebuffer frameBuff,
                                 VkImageView a_targetImageView, VkPipeline a_pipeline);
 
+  void SetupCullingPipeline();
+
   virtual void SetupSimplePipeline();
   void CleanupPipelineAndSwapchain();
   void RecreateSwapChain();
 
   void CreateUniformBuffer();
   void UpdateUniformBuffer(float a_time);
+
+  void CreateStorageBuffers();
+
+  void SetupTransforms(std::vector<mat4>& transforms);
 
   void Cleanup();
 

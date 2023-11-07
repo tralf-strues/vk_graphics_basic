@@ -4,6 +4,7 @@
 #include <geom/vk_mesh.h>
 #include <vk_pipeline.h>
 #include <vk_buffers.h>
+#include <random>
 
 SimpleRender::SimpleRender(uint32_t a_width, uint32_t a_height) : m_width(a_width), m_height(a_height)
 {
@@ -62,6 +63,8 @@ void SimpleRender::InitVulkan(const char** a_instanceExtensions, uint32_t a_inst
 
   m_pScnMgr = std::make_shared<SceneManager>(m_device, m_physicalDevice, m_queueFamilyIDXs.transfer,
                                              m_queueFamilyIDXs.graphics, false);
+
+  m_pCopyHelper = std::make_shared<vk_utils::SimpleCopyHelper>(m_physicalDevice, m_device, m_transferQueue, m_queueFamilyIDXs.compute, 8 * 1024 * 1024);
 }
 
 void SimpleRender::InitPresentation(VkSurfaceKHR &a_surface, bool initGUI)
@@ -124,18 +127,57 @@ void SimpleRender::CreateDevice(uint32_t a_deviceId)
   vkGetDeviceQueue(m_device, m_queueFamilyIDXs.transfer, 0, &m_transferQueue);
 }
 
+void SimpleRender::SetupCullingPipeline()
+{
+  std::vector<std::pair<VkDescriptorType, uint32_t>> dtypes = {
+    { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3 }
+  };
+
+  if (m_pFCBindings == nullptr)
+    m_pFCBindings = std::make_shared<vk_utils::DescriptorMaker>(m_device, dtypes, 1);
+
+  m_pFCBindings->BindBegin(VK_SHADER_STAGE_COMPUTE_BIT);
+  m_pFCBindings->BindBuffer(0, m_ssboDrawCmd, VK_NULL_HANDLE, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+  m_pFCBindings->BindBuffer(1, m_ssboTransforms, VK_NULL_HANDLE, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+  m_pFCBindings->BindBuffer(2, m_ssboVisibleIds, VK_NULL_HANDLE, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+  m_pFCBindings->BindEnd(&m_FCDSet, &m_FCDSetLayout);
+
+  // if we are recreating pipeline (for example, to reload shaders)
+  // we need to cleanup old pipeline
+  if (m_FCPipeline.layout != VK_NULL_HANDLE)
+  {
+    vkDestroyPipelineLayout(m_device, m_FCPipeline.layout, nullptr);
+    m_FCPipeline.layout = VK_NULL_HANDLE;
+  }
+  if (m_FCPipeline.pipeline != VK_NULL_HANDLE)
+  {
+    vkDestroyPipeline(m_device, m_FCPipeline.pipeline, nullptr);
+    m_FCPipeline.pipeline = VK_NULL_HANDLE;
+  }
+
+  vk_utils::ComputePipelineMaker maker;
+
+  maker.LoadShader(m_device, FC_SHADER_PATH + ".spv");
+
+  m_FCPipeline.layout = maker.MakeLayout(m_device, { m_FCDSetLayout }, sizeof(pushConstFC));
+
+  m_FCPipeline.pipeline = maker.MakePipeline(m_device);
+}
 
 void SimpleRender::SetupSimplePipeline()
 {
   std::vector<std::pair<VkDescriptorType, uint32_t> > dtypes = {
-      {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,             1}
+      {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,             1},
+      {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,             2}
   };
 
   if(m_pBindings == nullptr)
     m_pBindings = std::make_shared<vk_utils::DescriptorMaker>(m_device, dtypes, 1);
 
-  m_pBindings->BindBegin(VK_SHADER_STAGE_FRAGMENT_BIT);
+  m_pBindings->BindBegin(VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
   m_pBindings->BindBuffer(0, m_ubo, VK_NULL_HANDLE, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
+  m_pBindings->BindBuffer(1, m_ssboTransforms, VK_NULL_HANDLE, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+  m_pBindings->BindBuffer(2, m_ssboVisibleIds, VK_NULL_HANDLE, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
   m_pBindings->BindEnd(&m_dSet, &m_dSetLayout);
 
   // if we are recreating pipeline (for example, to reload shaders)
@@ -199,6 +241,78 @@ void SimpleRender::UpdateUniformBuffer(float a_time)
   memcpy(m_uboMappedMem, &m_uniforms, sizeof(m_uniforms));
 }
 
+void SimpleRender::CreateStorageBuffers()
+{
+  // SSBO Draw Cmd
+  VkMemoryRequirements memReq;
+  m_ssboDrawCmd = vk_utils::createBuffer(m_device, sizeof(m_drawCmd), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, &memReq);
+
+  VkMemoryAllocateInfo allocateInfo = {};
+  allocateInfo.sType                = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+  allocateInfo.pNext                = nullptr;
+  allocateInfo.allocationSize       = memReq.size;
+  allocateInfo.memoryTypeIndex      = vk_utils::findMemoryType(memReq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, m_physicalDevice);
+  VK_CHECK_RESULT(vkAllocateMemory(m_device, &allocateInfo, nullptr, &m_ssboDrawCmdAlloc));
+
+  VK_CHECK_RESULT(vkBindBufferMemory(m_device, m_ssboDrawCmd, m_ssboDrawCmdAlloc, 0));
+
+  VkDrawIndexedIndirectCommand cmdInitData{};
+  cmdInitData.firstIndex    = m_pScnMgr->GetMeshInfo(MESH_ID).m_indexOffset;
+  cmdInitData.vertexOffset  = m_pScnMgr->GetMeshInfo(MESH_ID).m_vertexOffset;
+  cmdInitData.firstInstance = 0;
+  cmdInitData.indexCount    = m_pScnMgr->GetMeshInfo(MESH_ID).m_indNum;
+  cmdInitData.instanceCount = 0;
+
+  m_pCopyHelper->UpdateBuffer(m_ssboDrawCmd, 0, &cmdInitData, sizeof(cmdInitData));
+
+  // SSBO Transforms
+  m_ssboTransforms = vk_utils::createBuffer(m_device, sizeof(mat4) * INSTANCES, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, &memReq);
+
+  allocateInfo.sType                = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+  allocateInfo.pNext                = nullptr;
+  allocateInfo.allocationSize       = memReq.size;
+  allocateInfo.memoryTypeIndex      = vk_utils::findMemoryType(memReq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, m_physicalDevice);
+  VK_CHECK_RESULT(vkAllocateMemory(m_device, &allocateInfo, nullptr, &m_ssboTransformsAlloc));
+
+  VK_CHECK_RESULT(vkBindBufferMemory(m_device, m_ssboTransforms, m_ssboTransformsAlloc, 0));
+
+  std::vector<mat4> transforms;
+  transforms.resize(INSTANCES);
+  SetupTransforms(transforms);
+
+  m_pCopyHelper->UpdateBuffer(m_ssboTransforms, 0, transforms.data(), transforms.size() * sizeof(mat4));
+
+  // SSBO Visible instance ids
+  m_ssboVisibleIds = vk_utils::createBuffer(m_device, sizeof(uint32_t) * INSTANCES, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, &memReq);
+
+  allocateInfo.sType                = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+  allocateInfo.pNext                = nullptr;
+  allocateInfo.allocationSize       = memReq.size;
+  allocateInfo.memoryTypeIndex      = vk_utils::findMemoryType(memReq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, m_physicalDevice);
+  VK_CHECK_RESULT(vkAllocateMemory(m_device, &allocateInfo, nullptr, &m_ssboVisibleIdsAlloc));
+
+  VK_CHECK_RESULT(vkBindBufferMemory(m_device, m_ssboVisibleIds, m_ssboVisibleIdsAlloc, 0));
+}
+
+void SimpleRender::SetupTransforms(std::vector<mat4> &transforms)
+{
+  static std::random_device s_device;
+  static std::mt19937 s_generator{ s_device() };
+
+  std::uniform_real_distribution<float> dist(-1.0, 1.0);
+
+  size_t rowSize = sqrt(transforms.size());
+  float margin   = 4.0f;
+
+  for (size_t i = 0; i < transforms.size(); ++i)
+  {
+    auto &transform = transforms[i];
+    transform[0][3] = margin * (i % rowSize) + dist(s_generator);
+    transform[1][3] = -1.0f;
+    transform[2][3] = -margin * (i / rowSize) + dist(s_generator);
+  }
+}
+
 void SimpleRender::BuildCommandBufferSimple(VkCommandBuffer a_cmdBuff, VkFramebuffer a_frameBuff,
                                             VkImageView, VkPipeline a_pipeline)
 {
@@ -213,7 +327,35 @@ void SimpleRender::BuildCommandBufferSimple(VkCommandBuffer a_cmdBuff, VkFramebu
   vk_utils::setDefaultViewport(a_cmdBuff, static_cast<float>(m_width), static_cast<float>(m_height));
   vk_utils::setDefaultScissor(a_cmdBuff, m_width, m_height);
 
-  ///// draw final scene to screen
+  ///// Frustum culling
+  {
+    vkCmdBindPipeline(a_cmdBuff, VK_PIPELINE_BIND_POINT_COMPUTE, m_FCPipeline.pipeline);
+
+    vkCmdBindDescriptorSets(a_cmdBuff, VK_PIPELINE_BIND_POINT_COMPUTE, m_FCPipeline.layout, 0, 1, &m_FCDSet, 0, VK_NULL_HANDLE);
+
+    pushConstFC.viewProjection = pushConst2M.projView;
+    pushConstFC.instancesTotal = INSTANCES;
+    pushConstFC.aabb           = m_pScnMgr->GetMeshBbox(MESH_ID);
+
+    vkCmdPushConstants(a_cmdBuff, m_FCPipeline.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pushConstFC), &pushConstFC);
+
+    vkCmdDispatch(a_cmdBuff, (INSTANCES - 1) / 32 + 1, 1, 1);
+  }
+
+  ///// Barrier
+  {
+    VkBufferMemoryBarrier barrier{};
+    barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    barrier.buffer = m_ssboDrawCmd;
+    barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
+    barrier.offset        = 0;
+    barrier.size          = VK_WHOLE_SIZE;
+    
+    vkCmdPipelineBarrier(a_cmdBuff, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, 0, 0, nullptr, 1, &barrier, 0, nullptr);
+  }
+
+  ///// Draw final scene to screen
   {
     VkRenderPassBeginInfo renderPassInfo = {};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -243,17 +385,22 @@ void SimpleRender::BuildCommandBufferSimple(VkCommandBuffer a_cmdBuff, VkFramebu
     vkCmdBindVertexBuffers(a_cmdBuff, 0, 1, &vertexBuf, &zero_offset);
     vkCmdBindIndexBuffer(a_cmdBuff, indexBuf, 0, VK_INDEX_TYPE_UINT32);
 
-    for (uint32_t i = 0; i < m_pScnMgr->InstancesNum(); ++i)
-    {
-      auto inst = m_pScnMgr->GetInstanceInfo(i);
+    vkCmdPushConstants(a_cmdBuff, m_basicForwardPipeline.layout, stageFlags, 0,
+                        sizeof(pushConst2M), &pushConst2M);
 
-      pushConst2M.model = m_pScnMgr->GetInstanceMatrix(i);
-      vkCmdPushConstants(a_cmdBuff, m_basicForwardPipeline.layout, stageFlags, 0,
-                         sizeof(pushConst2M), &pushConst2M);
+    vkCmdDrawIndexedIndirect(a_cmdBuff, m_ssboDrawCmd, 0, 1, 0);
 
-      auto mesh_info = m_pScnMgr->GetMeshInfo(inst.mesh_id);
-      vkCmdDrawIndexed(a_cmdBuff, mesh_info.m_indNum, 1, mesh_info.m_indexOffset, mesh_info.m_vertexOffset, 0);
-    }
+    //for (uint32_t i = 0; i < m_pScnMgr->InstancesNum(); ++i)
+    //{
+    //  auto inst = m_pScnMgr->GetInstanceInfo(i);
+
+    //  pushConst2M.model = m_pScnMgr->GetInstanceMatrix(i);
+    //  vkCmdPushConstants(a_cmdBuff, m_basicForwardPipeline.layout, stageFlags, 0,
+    //                     sizeof(pushConst2M), &pushConst2M);
+
+    //  auto mesh_info = m_pScnMgr->GetMeshInfo(inst.mesh_id);
+    //  vkCmdDrawIndexed(a_cmdBuff, mesh_info.m_indNum, 1, mesh_info.m_indexOffset, mesh_info.m_vertexOffset, 0);
+    //}
 
     vkCmdEndRenderPass(a_cmdBuff);
   }
@@ -264,6 +411,8 @@ void SimpleRender::BuildCommandBufferSimple(VkCommandBuffer a_cmdBuff, VkFramebu
 
 void SimpleRender::CleanupPipelineAndSwapchain()
 {
+  m_pCopyHelper = nullptr;
+
   if (!m_cmdBuffersDrawMain.empty())
   {
     vkFreeCommandBuffers(m_device, m_commandPool, static_cast<uint32_t>(m_cmdBuffersDrawMain.size()),
@@ -366,6 +515,17 @@ void SimpleRender::Cleanup()
     m_basicForwardPipeline.layout = VK_NULL_HANDLE;
   }
 
+  if (m_FCPipeline.pipeline != VK_NULL_HANDLE)
+  {
+    vkDestroyPipeline(m_device, m_FCPipeline.pipeline, nullptr);
+    m_FCPipeline.pipeline = VK_NULL_HANDLE;
+  }
+  if (m_FCPipeline.layout != VK_NULL_HANDLE)
+  {
+    vkDestroyPipelineLayout(m_device, m_FCPipeline.layout, nullptr);
+    m_FCPipeline.layout = VK_NULL_HANDLE;
+  }
+
   if (m_presentationResources.imageAvailable != VK_NULL_HANDLE)
   {
     vkDestroySemaphore(m_device, m_presentationResources.imageAvailable, nullptr);
@@ -394,6 +554,44 @@ void SimpleRender::Cleanup()
     vkFreeMemory(m_device, m_uboAlloc, nullptr);
     m_uboAlloc = VK_NULL_HANDLE;
   }
+
+  if (m_ssboDrawCmd != VK_NULL_HANDLE)
+  {
+    vkDestroyBuffer(m_device, m_ssboDrawCmd, nullptr);
+    m_ssboDrawCmd = VK_NULL_HANDLE;
+  }
+
+  if (m_ssboDrawCmdAlloc != VK_NULL_HANDLE)
+  {
+    vkFreeMemory(m_device, m_ssboDrawCmdAlloc, nullptr);
+    m_ssboDrawCmdAlloc = VK_NULL_HANDLE;
+  }
+
+  if (m_ssboTransforms != VK_NULL_HANDLE)
+  {
+    vkDestroyBuffer(m_device, m_ssboTransforms, nullptr);
+    m_ssboTransforms = VK_NULL_HANDLE;
+  }
+
+  if (m_ssboTransformsAlloc != VK_NULL_HANDLE)
+  {
+    vkFreeMemory(m_device, m_ssboTransformsAlloc, nullptr);
+    m_ssboTransformsAlloc = VK_NULL_HANDLE;
+  }
+
+  if (m_ssboVisibleIds != VK_NULL_HANDLE)
+  {
+    vkDestroyBuffer(m_device, m_ssboVisibleIds, nullptr);
+    m_ssboVisibleIds = VK_NULL_HANDLE;
+  }
+
+  if (m_ssboVisibleIdsAlloc != VK_NULL_HANDLE)
+  {
+    vkFreeMemory(m_device, m_ssboVisibleIdsAlloc, nullptr);
+    m_ssboVisibleIdsAlloc = VK_NULL_HANDLE;
+  }
+
+  m_pFCBindings = nullptr;
 
   m_pBindings = nullptr;
   m_pScnMgr   = nullptr;
@@ -431,6 +629,7 @@ void SimpleRender::ProcessInput(const AppInput &input)
     std::system("cd ../resources/shaders && python3 compile_simple_render_shaders.py");
 #endif
 
+    SetupCullingPipeline();
     SetupSimplePipeline();
 
     for (uint32_t i = 0; i < m_framesInFlight; ++i)
@@ -464,7 +663,10 @@ void SimpleRender::LoadScene(const char* path, bool transpose_inst_matrices)
   m_pScnMgr->LoadSceneXML(path, transpose_inst_matrices);
 
   CreateUniformBuffer();
+  CreateStorageBuffers();
+  
   SetupSimplePipeline();
+  SetupCullingPipeline();
 
   auto loadedCam = m_pScnMgr->GetCamera(0);
   m_cam.fov = loadedCam.fov;
