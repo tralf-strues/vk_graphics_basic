@@ -10,7 +10,6 @@
 #include <etna/RenderTargetStates.hpp>
 #include <vulkan/vulkan_core.h>
 
-
 /// RESOURCE ALLOCATION
 
 void SimpleShadowmapRender::AllocateResources()
@@ -23,15 +22,28 @@ void SimpleShadowmapRender::AllocateResources()
     .imageUsage = vk::ImageUsageFlagBits::eDepthStencilAttachment
   });
 
-  shadowMap = m_context->createImage(etna::Image::CreateInfo
+  vsmDepth = m_context->createImage(etna::Image::CreateInfo
   {
     .extent = vk::Extent3D{2048, 2048, 1},
-    .name = "shadow_map",
-    .format = vk::Format::eD16Unorm,
-    .imageUsage = vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eSampled
+    .name = "vsm_depth",
+    .format = vk::Format::eD32Sfloat,
+    .imageUsage = vk::ImageUsageFlagBits::eDepthStencilAttachment
   });
 
-  defaultSampler = etna::Sampler(etna::Sampler::CreateInfo{.name = "default_sampler"});
+  vsmMoments = m_context->createImage(etna::Image::CreateInfo
+  {
+    .extent     = vk::Extent3D{ 2048, 2048, 1 },
+    .name       = "vsm_moments",
+    .format     = vk::Format::eR32G32Sfloat,
+    .imageUsage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled,
+  });
+
+  defaultSampler = etna::Sampler(etna::Sampler::CreateInfo
+  {
+    .filter = vk::Filter::eLinear,
+    .name = "default_sampler",
+  });
+
   constants = m_context->createBuffer(etna::Buffer::CreateInfo
   {
     .size = sizeof(UniformParams),
@@ -62,16 +74,13 @@ void SimpleShadowmapRender::LoadScene(const char* path, bool transpose_inst_matr
 void SimpleShadowmapRender::DeallocateResources()
 {
   mainViewDepth.reset(); // TODO: Make an etna method to reset all the resources
-  shadowMap.reset();
+  vsmMoments.reset();
+  vsmDepth.reset();
   m_swapchain.Cleanup();
   vkDestroySurfaceKHR(GetVkInstance(), m_surface, nullptr);  
 
   constants = etna::Buffer();
 }
-
-
-
-
 
 /// PIPELINES CREATION
 
@@ -98,7 +107,8 @@ void SimpleShadowmapRender::loadShaders()
 {
   etna::create_program("simple_material",
     {VK_GRAPHICS_BASIC_ROOT"/resources/shaders/simple_shadow.frag.spv", VK_GRAPHICS_BASIC_ROOT"/resources/shaders/simple.vert.spv"});
-  etna::create_program("simple_shadow", {VK_GRAPHICS_BASIC_ROOT"/resources/shaders/simple.vert.spv"});
+  etna::create_program("vsm", 
+    {VK_GRAPHICS_BASIC_ROOT"/resources/shaders/vsm.frag.spv", VK_GRAPHICS_BASIC_ROOT "/resources/shaders/vsm.vert.spv"});
 }
 
 void SimpleShadowmapRender::SetupSimplePipeline()
@@ -111,7 +121,7 @@ void SimpleShadowmapRender::SetupSimplePipeline()
   m_pBindings = std::make_shared<vk_utils::DescriptorMaker>(m_context->getDevice(), dtypes, 2);
   
   m_pBindings->BindBegin(VK_SHADER_STAGE_FRAGMENT_BIT);
-  m_pBindings->BindImage(0, shadowMap.getView({}), defaultSampler.get(), VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+  m_pBindings->BindImage(0, vsmMoments.getView({}), defaultSampler.get(), VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
   m_pBindings->BindEnd(&m_quadDS, &m_quadDSLayout);
 
   etna::VertexShaderInputDescription sceneVertexInputDesc
@@ -132,12 +142,13 @@ void SimpleShadowmapRender::SetupSimplePipeline()
           .depthAttachmentFormat = vk::Format::eD32Sfloat
         }
     });
-  m_shadowPipeline = pipelineManager.createGraphicsPipeline("simple_shadow",
+  m_shadowPipeline = pipelineManager.createGraphicsPipeline("vsm",
     {
       .vertexShaderInput = sceneVertexInputDesc,
       .fragmentShaderOutput =
         {
-          .depthAttachmentFormat = vk::Format::eD16Unorm
+          .colorAttachmentFormats = { vk::Format::eR32G32Sfloat },
+          .depthAttachmentFormat = vk::Format::eD32Sfloat
         }
     });
 }
@@ -188,7 +199,7 @@ void SimpleShadowmapRender::BuildCommandBufferSimple(VkCommandBuffer a_cmdBuff, 
   //// draw scene to shadowmap
   //
   {
-    etna::RenderTargetState renderTargets(a_cmdBuff, {2048, 2048}, {}, shadowMap);
+    etna::RenderTargetState renderTargets(a_cmdBuff, {2048, 2048}, {vsmMoments}, vsmDepth);
 
     vkCmdBindPipeline(a_cmdBuff, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowPipeline.getVkPipeline());
     DrawSceneCmd(a_cmdBuff, m_lightMatrix);
@@ -200,9 +211,9 @@ void SimpleShadowmapRender::BuildCommandBufferSimple(VkCommandBuffer a_cmdBuff, 
     auto simpleMaterialInfo = etna::get_shader_program("simple_material");
 
     auto set = etna::create_descriptor_set(simpleMaterialInfo.getDescriptorLayoutId(0), a_cmdBuff,
-    {
-      etna::Binding {0, constants.genBinding()},
-      etna::Binding {1, shadowMap.genBinding(defaultSampler.get(), vk::ImageLayout::eShaderReadOnlyOptimal)}
+    { 
+      etna::Binding{ 0, constants.genBinding() },
+      etna::Binding{ 1, vsmMoments.genBinding(defaultSampler.get(), vk::ImageLayout::eShaderReadOnlyOptimal) }
     });
 
     VkDescriptorSet vkSet = set.getVkSet();
