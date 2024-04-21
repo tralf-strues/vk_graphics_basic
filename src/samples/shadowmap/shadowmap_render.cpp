@@ -44,7 +44,7 @@ void SimpleShadowmapRender::AllocateResources()
     .extent = vk::Extent3D{2048, 2048, 1},
     .name = "vsm_moments",
     .format = vk::Format::eR32G32Sfloat,
-    .imageUsage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled
+    .imageUsage = vk::ImageUsageFlagBits::eColorAttachment  | vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled
   });
 
   vsmMomentsBlurred = m_context->createImage(etna::Image::CreateInfo
@@ -303,11 +303,26 @@ void SimpleShadowmapRender::BuildCommandBufferVSM(VkCommandBuffer a_cmdBuff, VkI
     vkCmdPushConstants(a_cmdBuff, m_vsmBlurPipeline.getVkPipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(direction), direction);
     vkCmdDispatch(a_cmdBuff, 2048 / 32, 2048 / 32, 1);
 
+    etna::set_state(a_cmdBuff, vsmMomentsBlurred.get(), vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderRead, vk::ImageLayout::eShaderReadOnlyOptimal, vk::ImageAspectFlagBits::eColor);
+    etna::set_state(a_cmdBuff, vsmMoments.get(), vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderWrite, vk::ImageLayout::eGeneral, vk::ImageAspectFlagBits::eColor);
+    etna::flush_barriers(a_cmdBuff);
+
+    set = etna::create_descriptor_set(blur.getDescriptorLayoutId(0), a_cmdBuff, {
+        etna::Binding{ 0, vsmMomentsBlurred.genBinding(defaultSampler.get(), vk::ImageLayout::eShaderReadOnlyOptimal) },
+        etna::Binding{ 1, vsmMoments.genBinding(defaultSampler.get(), vk::ImageLayout::eGeneral) }
+    });
+
+    vkSet = set.getVkSet();
+    vkCmdBindDescriptorSets(a_cmdBuff, VK_PIPELINE_BIND_POINT_COMPUTE, m_vsmBlurPipeline.getVkPipelineLayout(), 0, 1, &vkSet, 0, VK_NULL_HANDLE);
+
     direction[0U] = 0.0f;
     direction[1U] = 1.0f;
     vkCmdPushConstants(a_cmdBuff, m_vsmBlurPipeline.getVkPipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(direction), direction);
     vkCmdDispatch(a_cmdBuff, 2048 / 32, 2048 / 32, 1);
   }
+
+  etna::set_state(a_cmdBuff, vsmMoments.get(), vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderRead, vk::ImageLayout::eShaderReadOnlyOptimal, vk::ImageAspectFlagBits::eColor);
+  etna::flush_barriers(a_cmdBuff);
 
   //// draw final scene to screen
   //
@@ -317,7 +332,7 @@ void SimpleShadowmapRender::BuildCommandBufferVSM(VkCommandBuffer a_cmdBuff, VkI
     auto set = etna::create_descriptor_set(simpleMaterialInfo.getDescriptorLayoutId(0), a_cmdBuff,
     {
       etna::Binding {0, constants.genBinding()},
-      etna::Binding {1, vsmMomentsBlurred.genBinding(defaultSampler.get(), vk::ImageLayout::eShaderReadOnlyOptimal)}
+      etna::Binding {1, vsmMoments.genBinding(defaultSampler.get(), vk::ImageLayout::eShaderReadOnlyOptimal)}
     });
 
     VkDescriptorSet vkSet = set.getVkSet();
