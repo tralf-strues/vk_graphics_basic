@@ -1,0 +1,94 @@
+#version 450
+
+const int SAMPLE_COUNT = 22;
+
+const float OFFSETS[22] = float[22](
+    -20.448970430265923,
+    -18.4539193747561,
+    -16.458877468078487,
+    -14.463843624018438,
+    -12.468816784674702,
+    -10.473795964235448,
+    -8.478780293057468,
+    -6.483769021125497,
+    -4.48876136715687,
+    -2.493755926496706,
+    -0.49874988611319804,
+    1.4962530470023068,
+    3.4912585165653676,
+    5.486264802951924,
+    7.481274151572068,
+    9.476287534090357,
+    11.47130567957191,
+    13.466329392628689,
+    15.461359605469259,
+    17.4563973459256,
+    19.451443690876673,
+    21
+);
+
+const float WEIGHTS[22] = float[22](
+    0.010130095641050201,
+    0.014942640800418504,
+    0.02117999483270579,
+    0.02884756955622661,
+    0.03775531052081503,
+    0.047482437411900905,
+    0.057381858412707806,
+    0.06663505118342447,
+    0.07435606755769719,
+    0.07972872447966228,
+    0.08214879637194077,
+    0.08133389709064776,
+    0.07738022454564483,
+    0.07074145093568049,
+    0.062144528909342064,
+    0.05245875318109838,
+    0.04255197445587245,
+    0.033167131631906016,
+    0.024841733637042368,
+    0.017878909033835044,
+    0.012364736411783884,
+    0.0045481133985972805
+);
+
+
+layout (binding = 0) uniform sampler2D original_image;
+layout (binding = 1, rg32f) uniform writeonly image2D blurred_image;
+
+// blur_direction is:
+//     vec2(1,0) for horizontal pass
+//     vec2(0,1) for vertical pass
+// The source texture to be blurred MUST use linear filtering!
+// pixel_coord is in [0..1]
+vec4 Blur21(vec2 blur_direction, vec2 pixel_coord, vec2 texture_size) {
+    vec2 inv_texture_size = 1.0f / texture_size; 
+
+    vec2 result = vec2(0.0);
+    for (int i = 0; i < SAMPLE_COUNT; ++i) {
+        vec2 offset = blur_direction * OFFSETS[i] * inv_texture_size;
+        float weight = WEIGHTS[i];
+        result += texture(original_image, pixel_coord + offset).xy * weight;
+    }
+
+    return vec4(result, 0.0, 0.0);
+}
+
+layout(push_constant) uniform params_t
+{
+    vec2 direction;
+};
+
+layout(local_size_x = 32, local_size_y = 32) in;
+void main() {
+    ivec2 texture_size = textureSize(original_image, 0);
+    ivec2 coords = ivec2(gl_GlobalInvocationID.xy);
+
+    vec2 f_texture_size = vec2(texture_size);
+    vec2 f_coords = vec2(coords) / f_texture_size;
+    
+    if (coords.x < texture_size.x && coords.y < texture_size.y) {
+//        imageStore(blurred_image, coords, vec4(0.25f));
+        imageStore(blurred_image, coords, Blur21(direction, f_coords, f_texture_size));
+    }
+}

@@ -46,7 +46,12 @@ public:
 private:
   etna::GlobalContext* m_context;
   etna::Image mainViewDepth;
+
   etna::Image shadowMap;
+  etna::Image vsmDepthBuffer;
+  etna::Image vsmMoments;
+  etna::Image vsmMomentsBlurred;
+
   etna::Sampler defaultSampler;
   etna::Buffer constants;
 
@@ -76,7 +81,11 @@ private:
   void* m_uboMappedMem = nullptr;
 
   etna::GraphicsPipeline m_basicForwardPipeline {};
-  etna::GraphicsPipeline m_shadowPipeline {};
+  etna::GraphicsPipeline m_shadowPipeline{};
+ 
+  etna::GraphicsPipeline m_vsmForwardPipeline{};
+  etna::GraphicsPipeline m_vsmPipeline{};
+  etna::ComputePipeline m_vsmBlurPipeline{};
   
   VkSurfaceKHR m_surface = VK_NULL_HANDLE;
   VulkanSwapChain m_swapchain;
@@ -86,6 +95,8 @@ private:
   uint32_t m_height = 1024u;
   uint32_t m_framesInFlight = 2u;
   bool m_vsync = false;
+
+  bool m_useVSM = false;
 
   vk::PhysicalDeviceFeatures m_enabledDeviceFeatures = {};
   std::vector<const char*> m_deviceExtensions;
@@ -127,6 +138,7 @@ private:
   void DrawFrameSimple(bool draw_gui);
 
   void BuildCommandBufferSimple(VkCommandBuffer a_cmdBuff, VkImage a_targetImage, VkImageView a_targetImageView);
+  void BuildCommandBufferVSM(VkCommandBuffer a_cmdBuff, VkImage a_targetImage, VkImageView a_targetImageView);
 
   void DrawSceneCmd(VkCommandBuffer a_cmdBuff, const float4x4& a_wvp, VkPipelineLayout a_pipelineLayout = VK_NULL_HANDLE);
 
