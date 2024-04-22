@@ -46,6 +46,7 @@ public:
 private:
   etna::GlobalContext* m_context;
   etna::Image mainViewDepth;
+  etna::Image mainViewColor;
   etna::Image shadowMap;
   etna::Sampler defaultSampler;
   etna::Buffer constants;
@@ -69,6 +70,13 @@ private:
     float4x4 model;
   } pushConst2M;
 
+  struct
+  {
+    float gamma = 2.2f;
+    float exposure = 0.5f;
+    uint32_t use_tonemapping = 1U;
+  } tonemapping;
+
   float4x4 m_worldViewProj;
   float4x4 m_lightMatrix;    
 
@@ -77,6 +85,7 @@ private:
 
   etna::GraphicsPipeline m_basicForwardPipeline {};
   etna::GraphicsPipeline m_shadowPipeline {};
+  etna::GraphicsPipeline m_tonemapPipeline {};
   
   VkSurfaceKHR m_surface = VK_NULL_HANDLE;
   VulkanSwapChain m_swapchain;
