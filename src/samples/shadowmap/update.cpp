@@ -70,9 +70,12 @@ void SimpleShadowmapRender::ProcessInput(const AppInput &input)
 
     etna::reload_shaders();
 
-    for (uint32_t i = 0; i < m_framesInFlight; ++i)
-    {
-      BuildCommandBufferSimple(m_cmdBuffersDrawMain[i], m_swapchain.GetAttachment(i).image, m_swapchain.GetAttachment(i).view);
+    for (uint32_t i = 0; i < m_framesInFlight; ++i) {
+      if (m_useRSM) {
+        BuildCommandBufferRSM(m_cmdBuffersDrawMain[i], m_swapchain.GetAttachment(i).image, m_swapchain.GetAttachment(i).view);
+      } else {
+        BuildCommandBufferSimple(m_cmdBuffersDrawMain[i], m_swapchain.GetAttachment(i).image, m_swapchain.GetAttachment(i).view);
+      }
     }
   }
 }
