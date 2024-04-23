@@ -1,0 +1,145 @@
+#version 450
+
+#extension GL_ARB_separate_shader_objects : enable
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_shader_explicit_arithmetic_types : require
+
+const uint32_t BLOCK_SIZE = 8U;
+const uint32_t TILE_SIZE  = BLOCK_SIZE + 2U;  // +2 is to account for the border
+
+layout(set = 0, binding = 0)       uniform sampler2D         depth_texture;
+layout(set = 0, binding = 1, r16f) uniform writeonly image2D ssao_image;
+
+layout(set = 0, binding = 2, std430) readonly buffer KernelSamplesBuffer {
+    f32vec4 kernel_samples[];
+};
+
+layout(push_constant) uniform PushConstant {
+    f32mat4   inv_proj_view;
+    f32mat4   proj_view;
+    f32vec2   inv_texture_size;
+    uint32_t  kernel_size;
+    float32_t radius;
+    float32_t bias;
+    bool      use_range_check;
+} params;
+
+shared f32vec3 shared_pos[TILE_SIZE * TILE_SIZE];
+
+uint32_t ToTileIdx(u32vec2 tile_coords) {
+    return tile_coords.y * TILE_SIZE + tile_coords.x;
+}
+
+f32vec2 NormalizedTexCoords(u32vec2 pixel_coords) {
+    return (f32vec2(pixel_coords) + f32vec2(0.5f)) * params.inv_texture_size;
+}
+
+f32vec3 ReconstructPosition(f32vec2 tex_coords, float32_t depth) {
+    f32vec4   projected_pos = f32vec4(tex_coords * 2.0f - 1.0f, depth, 1.0f);
+    f32vec4   ws_pos        = params.inv_proj_view * projected_pos;
+
+    return ws_pos.xyz / ws_pos.w;
+}
+
+f32vec2 ProjectPosition(f32vec3 position) {
+    f32vec4 projected = params.proj_view * f32vec4(position, 1.0f);
+    projected.xy /= projected.w;
+    projected.xy = projected.xy * 0.5f + 0.5f;
+
+    return projected.xy;
+}
+
+f32vec3 ReconstructNormal(u32vec2 tile_coords) {
+    const uint32_t cross_tile_idx[] = uint32_t[] (
+        ToTileIdx(tile_coords),                    // 0: center
+        ToTileIdx(tile_coords + u32vec2(1U, 0U)),  // 1: right
+        ToTileIdx(tile_coords - u32vec2(1U, 0U)),  // 2: left
+        ToTileIdx(tile_coords - u32vec2(0U, 1U)),  // 3: bottom
+        ToTileIdx(tile_coords + u32vec2(0U, 1U))   // 4: top
+    );
+
+    f32vec3 p0 = shared_pos[cross_tile_idx[0U]];
+
+    // Choose the points from the cross pattern most likely to be on the same surface with the center point
+    uint32_t best_idx_h = abs(shared_pos[cross_tile_idx[1U]].z - p0.z) < abs(shared_pos[cross_tile_idx[2U]].z - p0.z) ? 1U : 2U;
+    uint32_t best_idx_v = abs(shared_pos[cross_tile_idx[3U]].z - p0.z) < abs(shared_pos[cross_tile_idx[4U]].z - p0.z) ? 3U : 4U;
+
+    f32vec3 p1;
+    f32vec3 p2;
+    if (best_idx_h == 1U && best_idx_v == 4U) {
+        // Top-right triangle
+        p1 = shared_pos[cross_tile_idx[1U]];
+        p2 = shared_pos[cross_tile_idx[4U]];
+    } else if (best_idx_h == 1U && best_idx_v == 3U) {
+        // Bottom-right triangle
+        p1 = shared_pos[cross_tile_idx[3U]];
+        p2 = shared_pos[cross_tile_idx[1U]];
+    } else if (best_idx_h == 2U && best_idx_v == 4U) {
+        // Top-left triangle
+        p1 = shared_pos[cross_tile_idx[4U]];
+        p2 = shared_pos[cross_tile_idx[2U]];
+    } else if (best_idx_h == 2U && best_idx_v == 3U) {
+        // Bottom-left triangle
+        p1 = shared_pos[cross_tile_idx[2U]];
+        p2 = shared_pos[cross_tile_idx[3U]];
+    }
+
+    return normalize(cross(p2 - p0, p1 - p0));
+}
+
+float32_t Random(f32vec2 st) {
+    return fract(sin(dot(st.xy, f32vec2(12.9898f, 78.233f))) * 43758.5453123f);
+}
+
+f32vec2 RandomNormalized2(f32vec2 st) {
+    return normalize(f32vec2(Random(st), Random(st + f32vec2(0.1f, 1.2f))));
+}
+
+layout(local_size_x = BLOCK_SIZE, local_size_y = BLOCK_SIZE) in;
+void main() {
+    if (gl_LocalInvocationID.xy == u32vec2(0, 0)) {
+        const u32vec2 tile_upper_left = gl_WorkGroupID.xy * BLOCK_SIZE - 1U;
+        for (uint32_t i = 0U; i < TILE_SIZE; ++i) {
+            for (uint32_t j = 0U; j < TILE_SIZE; ++j) {
+                u32vec2   pixel_coords = tile_upper_left + u32vec2(i, j);
+                f32vec2   tex_coords   = NormalizedTexCoords(pixel_coords);
+                float32_t depth        = texture(depth_texture, tex_coords).x;
+                f32vec3   position     = ReconstructPosition(tex_coords, depth);
+                uint32_t  tile_idx     = ToTileIdx(u32vec2(i, j));
+
+                shared_pos[tile_idx] = position;
+            }
+        }
+    }
+
+    barrier();
+
+    u32vec2  tile_coords = gl_LocalInvocationID.xy + u32vec2(1U, 1U);
+    uint32_t tile_idx    = ToTileIdx(tile_coords);
+    
+    f32vec3  position    = shared_pos[tile_idx];
+    f32vec3  normal      = ReconstructNormal(tile_coords);
+
+    // Orient sample hemisphere
+    f32vec2  tex_coords  = NormalizedTexCoords(gl_GlobalInvocationID.xy);
+    f32vec3  rand_vector = f32vec3(RandomNormalized2(tex_coords), 0.0f);
+    f32vec3  tangent     = normalize(rand_vector - normal * dot(rand_vector, normal));
+    f32vec3  bitangent   = cross(normal, tangent);
+    f32mat3  tbn         = f32mat3(tangent, bitangent, normal);
+
+    float32_t occlusion = 0.0f;
+    for (uint32_t i = 0U; i < params.kernel_size; ++i) {
+        f32vec3   sample_pos        = tbn * kernel_samples[i].xyz * params.radius + position;
+        f32vec2   sample_tex_coords = ProjectPosition(sample_pos);
+        float32_t sample_depth      = ReconstructPosition(sample_tex_coords, texture(depth_texture, sample_tex_coords).x).z;
+
+        float32_t range_check  = smoothstep(0.0f, 1.0f, params.radius / abs(position.z - sample_depth));
+        range_check            = params.use_range_check ? range_check : 1.0f;
+
+        occlusion += (sample_depth > sample_pos.z - params.bias ? 1.0f : 0.0f) * range_check;
+    }
+
+    occlusion = 1.0f - (occlusion / float32_t(params.kernel_size));
+
+    imageStore(ssao_image, i32vec2(gl_GlobalInvocationID.xy), f32vec4(occlusion));
+}

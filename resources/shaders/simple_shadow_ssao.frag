@@ -20,6 +20,7 @@ layout(binding = 0, set = 0) uniform AppData
 };
 
 layout (binding = 1) uniform sampler2D shadowMap;
+layout (binding = 2) uniform sampler2D ssaoMap;
 
 void main()
 {
@@ -39,6 +40,7 @@ void main()
   vec3 lightDir   = normalize(Params.lightPos - surf.wPos);
   vec4 lightColor = max(dot(surf.wNorm, lightDir), 0.0f) * lightColor1;
 
+  float ao      = texture(ssaoMap, gl_FragCoord.xy / Params.screenSize).x;
   vec4 ambient  = Params.useDirForAmbient ? lightColor1 * vec4(Params.ambientColor, 1.0f) : vec4(Params.ambientColor, 1.0f);
-  out_fragColor   = (lightColor*shadow + ambient) * vec4(Params.baseColor, 1.0f);
+  out_fragColor = (lightColor*shadow + ao * ambient) * vec4(Params.baseColor, 1.0f);
 }

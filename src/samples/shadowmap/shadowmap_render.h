@@ -50,6 +50,20 @@ private:
   etna::Sampler defaultSampler;
   etna::Buffer constants;
 
+  etna::Image m_ssaoImage;
+  etna::Image m_ssaoBlurTempImage;
+  etna::Buffer m_ssaoKernelBuffer;
+  void* m_ssaoKernelMappedMemory;
+                      
+  uint32_t m_ssaoKernelSize = 128U;
+  std::vector<float4> m_ssaoKernelSamples;
+  float m_ssaoRadius = 0.2f;
+  float m_ssaoBias = 0.001f;
+  bool m_ssaoUseRangeCheck = true;
+  float3 m_ambientColor = float3(0.35f);
+  bool m_useDirForAmbient = true;
+  bool m_useBlur = true;
+
   VkCommandPool    m_commandPool    = VK_NULL_HANDLE;
 
   struct
@@ -77,7 +91,11 @@ private:
 
   etna::GraphicsPipeline m_basicForwardPipeline {};
   etna::GraphicsPipeline m_shadowPipeline {};
-  
+  etna::GraphicsPipeline m_depthPrepassPipeline {};
+  etna::GraphicsPipeline m_forwardSSAOPipeline {};
+  etna::ComputePipeline m_ssaoPipeline {};
+  etna::ComputePipeline m_ssaoBlurPipeline {};
+
   VkSurfaceKHR m_surface = VK_NULL_HANDLE;
   VulkanSwapChain m_swapchain;
 
@@ -123,10 +141,13 @@ private:
     bool   usePerspectiveM;  ///!< use perspective matrix if true and ortographics otherwise
   
   } m_light;
- 
+
+  bool m_useSSAO = true;
+
   void DrawFrameSimple(bool draw_gui);
 
   void BuildCommandBufferSimple(VkCommandBuffer a_cmdBuff, VkImage a_targetImage, VkImageView a_targetImageView);
+  void BuildCommandBufferSSAO(VkCommandBuffer a_cmdBuff, VkImage a_targetImage, VkImageView a_targetImageView);
 
   void DrawSceneCmd(VkCommandBuffer a_cmdBuff, const float4x4& a_wvp, VkPipelineLayout a_pipelineLayout = VK_NULL_HANDLE);
 
@@ -136,7 +157,7 @@ private:
   void RecreateSwapChain();
 
   void UpdateUniformBuffer(float a_time);
-
+  void RecalculateKernelSamples();
 
   void SetupDeviceExtensions();
 

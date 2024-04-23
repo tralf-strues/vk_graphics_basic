@@ -18,7 +18,11 @@ void SimpleShadowmapRender::DrawFrameSimple(bool draw_gui)
   VkSemaphore waitSemaphores[] = {m_presentationResources.imageAvailable};
   VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
 
-  BuildCommandBufferSimple(currentCmdBuf, m_swapchain.GetAttachment(imageIdx).image, m_swapchain.GetAttachment(imageIdx).view);
+  if (m_useSSAO) {
+    BuildCommandBufferSSAO(currentCmdBuf, m_swapchain.GetAttachment(imageIdx).image, m_swapchain.GetAttachment(imageIdx).view);
+  } else {
+    BuildCommandBufferSimple(currentCmdBuf, m_swapchain.GetAttachment(imageIdx).image, m_swapchain.GetAttachment(imageIdx).view);
+  }
 
   std::vector<VkCommandBuffer> submitCmdBufs = { currentCmdBuf };
 
@@ -66,6 +70,7 @@ void SimpleShadowmapRender::DrawFrameSimple(bool draw_gui)
 void SimpleShadowmapRender::DrawFrame(float a_time, DrawMode a_mode)
 {
   UpdateUniformBuffer(a_time);
+  RecalculateKernelSamples();
   switch (a_mode)
   {
     case DrawMode::WITH_GUI:

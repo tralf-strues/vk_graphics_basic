@@ -49,6 +49,10 @@ struct UniformParams
   shader_float time;
   shader_vec3  baseColor;
   shader_bool  animateLightColor;
+  shader_vec3  ambientColor;
+  shader_bool  useDirForAmbient;
+  shader_vec2  screenSize;
+  shader_vec2  padd1;
 };
 
 #endif // VK_GRAPHICS_BASIC_COMMON_H
