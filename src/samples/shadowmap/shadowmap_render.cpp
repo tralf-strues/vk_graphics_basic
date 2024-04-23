@@ -15,6 +15,13 @@
 
 constexpr vk::Format RSM_IMAGE_FORMAT = vk::Format::eR32G32B32A32Sfloat;
 constexpr uint32_t   RSM_IMAGE_SIZE   = 1024U;
+const     float3     BASE_COLORS[]    = {
+    float3(0.8f, 0.0f, 0.0f),
+    float3(0.0f, 1.5f, 0.0f),
+    float3(0.0f, 0.0f, 1.5f),
+    float3(0.8f, 0.0f, 0.8f),
+    float3(0.0f, 0.8f, 0.8f),
+};
 
 void SimpleShadowmapRender::AllocateResources()
 {
@@ -87,6 +94,11 @@ void SimpleShadowmapRender::LoadScene(const char* path, bool transpose_inst_matr
 {
   m_pScnMgr->LoadSceneXML(path, transpose_inst_matrices);
 
+  m_baseColors.resize(m_pScnMgr->InstancesNum());
+  for (uint32_t i = 0U; i < m_baseColors.size(); ++i) {
+    m_baseColors[i] = BASE_COLORS[i % std::size(BASE_COLORS)];
+  }
+
   // TODO: Make a separate stage
   loadShaders();
   PreparePipelines();
@@ -98,8 +110,8 @@ void SimpleShadowmapRender::LoadScene(const char* path, bool transpose_inst_matr
   m_cam.lookAt = float3(loadedCam.lookAt);
   m_cam.tdist  = loadedCam.farPlane;
 
-  m_uniforms.rsm_intensity = 0.001f;
-  m_uniforms.rsm_rmax      = 0.04f;
+  m_uniforms.rsm_intensity = 0.004f;
+  m_uniforms.rsm_rmax      = 0.03f;
 }
 
 void SimpleShadowmapRender::DeallocateResources()
@@ -222,24 +234,21 @@ void SimpleShadowmapRender::SetupSimplePipeline()
 
 /// COMMAND BUFFER FILLING
 
-void SimpleShadowmapRender::DrawSceneCmd(VkCommandBuffer a_cmdBuff, const float4x4& a_wvp, VkPipelineLayout a_pipelineLayout)
+void SimpleShadowmapRender::DrawSceneCmd(VkCommandBuffer a_cmdBuff, const float4x4& a_wvp, VkPipelineLayout a_pipelineLayout, VkShaderStageFlags stageFlags)
 {
-  VkShaderStageFlags stageFlags = (VK_SHADER_STAGE_VERTEX_BIT);
-
   VkDeviceSize zero_offset = 0u;
-  VkBuffer vertexBuf = m_pScnMgr->GetVertexBuffer();
-  VkBuffer indexBuf  = m_pScnMgr->GetIndexBuffer();
+  VkBuffer     vertexBuf   = m_pScnMgr->GetVertexBuffer();
+  VkBuffer     indexBuf    = m_pScnMgr->GetIndexBuffer();
   
   vkCmdBindVertexBuffers(a_cmdBuff, 0, 1, &vertexBuf, &zero_offset);
   vkCmdBindIndexBuffer(a_cmdBuff, indexBuf, 0, VK_INDEX_TYPE_UINT32);
 
   pushConst2M.projView = a_wvp;
-  for (uint32_t i = 0; i < m_pScnMgr->InstancesNum(); ++i)
-  {
+  for (uint32_t i = 0U; i < m_pScnMgr->InstancesNum(); ++i) {
     auto inst         = m_pScnMgr->GetInstanceInfo(i);
     pushConst2M.model = m_pScnMgr->GetInstanceMatrix(i);
-    vkCmdPushConstants(a_cmdBuff, a_pipelineLayout,
-      stageFlags, 0, sizeof(pushConst2M), &pushConst2M);
+    vkCmdPushConstants(a_cmdBuff, a_pipelineLayout, stageFlags, 0U,                  sizeof(pushConst2M),     &pushConst2M);
+    vkCmdPushConstants(a_cmdBuff, a_pipelineLayout, stageFlags, sizeof(pushConst2M), sizeof(m_baseColors[i]), &m_baseColors[i]);
 
     auto mesh_info = m_pScnMgr->GetMeshInfo(inst.mesh_id);
     vkCmdDrawIndexed(a_cmdBuff, mesh_info.m_indNum, 1, mesh_info.m_indexOffset, mesh_info.m_vertexOffset, 0);
@@ -262,7 +271,7 @@ void SimpleShadowmapRender::BuildCommandBufferSimple(VkCommandBuffer a_cmdBuff, 
     etna::RenderTargetState renderTargets(a_cmdBuff, {0, 0, 2048, 2048}, {}, {.image = shadowMap.get(), .view = shadowMap.getView({})});
 
     vkCmdBindPipeline(a_cmdBuff, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowPipeline.getVkPipeline());
-    DrawSceneCmd(a_cmdBuff, m_lightMatrix, m_shadowPipeline.getVkPipelineLayout());
+    DrawSceneCmd(a_cmdBuff, m_lightMatrix, m_shadowPipeline.getVkPipelineLayout(), VK_SHADER_STAGE_VERTEX_BIT);
   }
 
   //// draw final scene to screen

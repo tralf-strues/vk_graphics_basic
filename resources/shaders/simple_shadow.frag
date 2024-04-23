@@ -19,6 +19,13 @@ layout(binding = 0, set = 0) uniform AppData
   UniformParams Params;
 };
 
+layout(push_constant) uniform params_t
+{
+    mat4 mProjView;
+    mat4 mModel;
+    vec3 mBaseColor;
+};
+
 layout (binding = 1) uniform sampler2D shadowMap;
 
 void main()
@@ -30,13 +37,12 @@ void main()
   const bool  outOfView = (shadowTexCoord.x < 0.0001f || shadowTexCoord.x > 0.9999f || shadowTexCoord.y < 0.0091f || shadowTexCoord.y > 0.9999f);
   const float shadow    = ((posLightSpaceNDC.z < textureLod(shadowMap, shadowTexCoord, 0).x + 0.001f) || outOfView) ? 1.0f : 0.0f;
 
-  const vec4 dark_violet = vec4(0.59f, 0.0f, 0.82f, 1.0f);
-  const vec4 chartreuse  = vec4(0.5f, 1.0f, 0.0f, 1.0f);
-
-  vec4 lightColor1 = mix(dark_violet, chartreuse, abs(sin(Params.time)));
-  vec4 lightColor2 = vec4(1.0f, 1.0f, 1.0f, 1.0f);
+  const vec3   color1      = vec3(0.5f, 0.5f, 0.5f);
+  const vec3   color2      = vec3(1.0f, 1.0f, 1.0f);
+  const vec4   lightColor1 = vec4(mix(color1, color2, abs(sin(Params.time))), 1.0f);
+  vec4         lightColor2 = vec4(1.0f, 1.0f, 1.0f, 1.0f);
    
   vec3 lightDir   = normalize(Params.lightPos - surf.wPos);
   vec4 lightColor = max(dot(surf.wNorm, lightDir), 0.0f) * lightColor1;
-  out_fragColor   = (lightColor*shadow + vec4(0.1f)) * vec4(Params.baseColor, 1.0f);
+  out_fragColor   = (lightColor*shadow + vec4(0.1f)) * vec4(mBaseColor, 1.0f);
 }

@@ -12,6 +12,7 @@ layout(location = 1) in f32vec4 in_tex_coords_tangant;
 layout(push_constant) uniform PushContant {
     f32mat4 proj_view;
     f32mat4 model;
+    f32vec3 base_color;
 };
 
 layout(location = 0) out f32vec3 out_ws_position;

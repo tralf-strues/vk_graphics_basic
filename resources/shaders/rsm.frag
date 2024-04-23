@@ -17,15 +17,21 @@ layout(binding = 0, set = 0) uniform AppData {
 	UniformParams params;
 };
 
+layout(push_constant) uniform PushContant {
+    f32mat4 proj_view;
+    f32mat4 model;
+    f32vec3 base_color;
+};
+
 f32vec3 CalculateDirectLighting(f32vec3 ws_pos, f32vec3 ws_normal) {
-	const f32vec3   dark_violet = f32vec3(0.59f, 0.0f, 0.82f);
-	const f32vec3   chartreuse  = f32vec3(0.5f, 1.0f, 0.0f);
-	const f32vec3   light_color = mix(dark_violet, chartreuse, abs(sin(params.time)));
+	const f32vec3   color1      = f32vec3(0.5f, 0.5f, 0.5f);
+	const f32vec3   color2      = f32vec3(1.0f, 1.0f, 1.0f);
+	const f32vec3   light_color = mix(color1, color2, abs(sin(params.time)));
    
 	const f32vec3   light_dir   = normalize(params.lightPos - ws_pos);
 	const float32_t light_align = max(dot(ws_normal, light_dir), 0.0f);
   
-	return light_color * light_align * params.baseColor;
+	return light_color * light_align * base_color;
 }
 
 void main() {
