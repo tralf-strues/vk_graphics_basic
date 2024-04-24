@@ -49,6 +49,28 @@ private:
   etna::Image shadowMap;
   etna::Sampler defaultSampler;
   etna::Buffer constants;
+  etna::Image m_heightmap;
+
+  uint32_t m_heightmapResolution = 2048;
+
+  struct
+  {
+    uint32_t octavesCount   = 6U;
+    float    fudgeFactor    = 1.2f;
+    float    heightExponent = 2.5f;
+    float    baseFrequency  = 1.5f;
+  } m_heightmapParams;
+
+  struct
+  {
+    float4x4 projView;
+    float4x4 model;
+	float2   heightRange  = float2(0.0f, 1.0f);
+    uint32_t subdivisions = 64U;
+  } m_terrainParams;
+
+  float2 m_terrainScale = float2(7.0f, 1.0f);
+  float m_terrainY = -2.1f;
 
   VkCommandPool    m_commandPool    = VK_NULL_HANDLE;
 
@@ -77,6 +99,8 @@ private:
 
   etna::GraphicsPipeline m_basicForwardPipeline {};
   etna::GraphicsPipeline m_shadowPipeline {};
+  etna::GraphicsPipeline m_terrainPipeline {};
+  etna::ComputePipeline m_genHeightmapPipeline {};
   
   VkSurfaceKHR m_surface = VK_NULL_HANDLE;
   VulkanSwapChain m_swapchain;
@@ -87,7 +111,7 @@ private:
   uint32_t m_framesInFlight = 2u;
   bool m_vsync = false;
 
-  vk::PhysicalDeviceFeatures m_enabledDeviceFeatures = {};
+  vk::PhysicalDeviceFeatures m_enabledDeviceFeatures = {.tessellationShader = true};
   std::vector<const char*> m_deviceExtensions;
   std::vector<const char*> m_instanceExtensions;
 

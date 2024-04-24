@@ -1,0 +1,44 @@
+#version 450
+
+#extension GL_ARB_separate_shader_objects : enable
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_shader_explicit_arithmetic_types : require
+
+#include "perlin_noise.glsl"
+
+layout(binding = 0, r32f) uniform writeonly image2D heightmap;
+
+layout(push_constant) uniform PushConstant {
+    uint32_t  octaves_count;
+    float32_t fudge_factor;
+    float32_t height_exponent;
+    float32_t base_frequency;
+} params;
+
+float32_t CalculateHeight(f32vec2 uv, f32vec2 texture_size) {
+    f32vec2   nuv         = uv - 0.5f;
+    float32_t height      = 0.0f;
+    float32_t factors_sum = 0.0f;
+
+    for (uint32_t octave = 0U; octave < params.octaves_count; ++octave) {
+        float32_t frequency = float32_t(1U << octave);
+        float32_t factor    = 1.0f / frequency;
+
+        factors_sum += factor;
+        height      += factor * max(0.0f, 0.5f * snoise(params.base_frequency * frequency * nuv) + 0.5f);
+    }
+
+    height /= factors_sum;
+    return pow(height * params.fudge_factor, params.height_exponent);
+}
+
+layout(local_size_x = 32, local_size_y = 32) in;
+void main() {
+    i32vec2 texture_size = imageSize(heightmap);
+    i32vec2 coords       = i32vec2(gl_GlobalInvocationID.xy);
+    f32vec2 uv           = f32vec2(coords) / f32vec2(texture_size);
+
+    if (coords.x < texture_size.x && coords.y < texture_size.y) {
+        imageStore(heightmap, coords, f32vec4(CalculateHeight(uv, texture_size), 0.0f, 0.0f, 0.0f));
+    }
+}
